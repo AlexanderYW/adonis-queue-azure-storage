@@ -1,11 +1,8 @@
 import { DefaultAzureCredential } from '@azure/identity'
 import {
   DequeuedMessageItem,
-  PeekedMessageItem,
   QueueClient,
-  QueuePeekMessagesResponse,
   QueueReceiveMessageOptions,
-  QueueReceiveMessageResponse,
   QueueSendMessageOptions,
   QueueSendMessageResponse,
   QueueServiceClient,
@@ -33,10 +30,11 @@ const safeParseString = (inputString: string) => {
   }
 }
 
-const unwrap = (job: DequeuedMessageItem | QueueSendMessageResponse) => ({
+const unwrap = (job: DequeuedMessageItem | QueueSendMessageResponse): JobContract<any> => ({
   id: job.messageId,
+  // @ts-ignore
   payload: safeParseString(job.messageText || job._response.bodyAsText),
-  runAt: job.nextVisibleOn || null,
+  runAt: job.nextVisibleOn.getTime() || 0,
   delayed: job.insertedOn !== job.nextVisibleOn,
   progress: 0,
   reportProgress(progress) {
@@ -45,9 +43,12 @@ const unwrap = (job: DequeuedMessageItem | QueueSendMessageResponse) => ({
 })
 
 export default class AzureStorageQueue implements DriverContract {
-  private queue: QueueClient | null = null
+  // @ts-ignore
   private poller: NodeJS.Timeout | null = null
+  // @ts-ignore
   private processing: boolean = false
+
+  private queue: QueueClient | null = null
   private processor: ((job: any) => void) | null = null
 
   // @ts-ignore unused app variable
@@ -146,5 +147,19 @@ export default class AzureStorageQueue implements DriverContract {
   public async close(): Promise<void> {
     if (!this.queue) return
     this.queue = null
+  }
+
+  /**
+   * Starts processing queued jobs. If no jobs in queue,
+   * then starts polling queue for new ones
+   *
+   * @param cb Callback to execute. Callback is the job executor
+   * which receives queued job
+   */
+  // @ts-ignore
+  public process(cb: (job: JobContract<any>) => void) {
+    throw new Error('Not implemented yet')
+    // this.processor = cb
+    // this.start()
   }
 }
