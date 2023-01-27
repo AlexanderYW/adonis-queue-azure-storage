@@ -33,26 +33,9 @@
   "author": "Alexander Wennerstrøm <alexanderw0310@gmail.com>",
   "license": "ISC",
   "adonisjs": {
-    "types": "@cavai/adonis-queue",
+    "types": "adonis-drive-azure-storage",
     "providers": [
-      "@cavai/adonis-queue"
-    ],
-    "templates": {
-      "start": [
-        {
-          "src": "jobs.txt",
-          "dest": "jobs"
-        }
-      ],
-      "config": [
-        {
-          "src": "queue.txt",
-          "dest": "queue"
-        }
-      ]
-    },
-    "commands": [
-      "@cavai/adonis-queue/build/commands"
+      "adonis-drive-azure-storage"
     ]
   },
   "devDependencies": {
