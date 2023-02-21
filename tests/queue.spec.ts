@@ -9,7 +9,11 @@
 
 import { test } from '@japa/runner'
 import AzureStorageQueue, { AzureStorageConfig } from '../src/drivers'
-import { setupGroup, sleep } from './helpers'
+// import { setupGroup, sleep } from './helpers'
+
+const sleep = (time) => {
+  return new Promise((resolve) => setTimeout(resolve, time))
+}
 
 const configs = {
   AzureStorage: {
@@ -23,88 +27,74 @@ const configs = {
   } as AzureStorageConfig,
 }
 
-const [name, config] = Object.entries(configs)[0]
-
-test.group(`${config.driver}Queue`, (group) => {
-  // setupGroup(group, { ...configs, ...configsDelayed })
-  setupGroup(group, configs)
-
-  test(`missing queue name throws exception`, async ({ queues, expect }) => {
-    expect(queues.use).toThrow(Error)
+test.group('Azure Storage Queue driver', (group) => {
+  test('Create instance of driver', async ({ assert }) => {
+    const driver = new AzureStorageQueue(configs['AzureStorage'])
+    assert.isTrue(driver instanceof AzureStorageQueue)
   })
+  test('Authorize access', async ({ assert }) => {
+    const driver = new AzureStorageQueue(configs['AzureStorage'])
 
-  test(`getJob returns null for missing id`, async ({ queues, expect }) => {
-    queues.extend(name, (cfg, app) => new AzureStorageQueue(cfg, app))
-    const queue = queues.use(name)
-    const id = await queue.getJob('111')
-    expect(id).toBeNull()
+    const client = await driver.getQueueServiceClient()
+    assert.exists(client)
   })
+  test('Create and delete queue', async ({ assert }) => {
+    const driver = new AzureStorageQueue(configs['AzureStorage'])
 
-  test(`single job is executed`, async ({ queues, expect }) => {
-    queues.extend(name, (cfg, app) => new AzureStorageQueue(cfg, app))
-    const queue = queues.use(name)
-
-    await queue.add({})
-    await sleep(100)
-    const job = await queue.getJob()
-    expect(job).toBeDefined()
+    await driver.createQueue('testqueue')
+    await driver.deleteQueue('testqueue')
   })
+  test('List queues', async ({ assert }) => {
+    const driver = new AzureStorageQueue(configs['AzureStorage'])
 
-  test(`payload is passed to processor`, async ({ queues, expect }) => {
-    queues.extend(name, (cfg, app) => new AzureStorageQueue(cfg, app))
-    const queue = queues.use(name)
-    const inPayload = { name: 'test' }
-
-    await queue.add(inPayload)
-    await sleep(100)
-    const outPayload = (await queue.getJob()).payload
-    expect(outPayload).toEqual(inPayload)
+    const queues = await driver.listQueues()
+    assert.exists(queues)
   })
+  test('Get queue properties', async ({ assert }) => {
+    const driver = new AzureStorageQueue(configs['AzureStorage'])
 
-  test(`default payload is object`, async ({ queues, expect }) => {
-    queues.extend(name, (cfg, app) => new AzureStorageQueue(cfg, app))
-    const queue = queues.use(name)
-
-    await queue.add({})
-    await sleep(100)
-    const payload = (await queue.getJob()).payload
-    expect(payload).toEqual({})
+    const queues = await driver.getQueueProperties()
+    assert.equal(typeof queues.approximateMessagesCount, 'number')
   })
-
-  test(`add reopens queue if it is closed`, async ({ queues, expect }) => {
-    queues.extend(name, (cfg, app) => new AzureStorageQueue(cfg, app))
-    const queue = queues.use(name)
-    await queue.close()
-    await expect(queue.add({})).toBeTruthy()
+  test('Store message in queue', async ({ assert }) => {
+    const driver = new AzureStorageQueue(configs['AzureStorage'])
+    const message = await driver.store('Hello World!')
+    assert.exists(message)
   })
+  test('Clear messages', async ({ assert }) => {
+    const driver = new AzureStorageQueue(configs['AzureStorage'])
 
-  test(`add returns job id`, async function ({ queues, expect }) {
-    queues.extend(name, (cfg, app) => new AzureStorageQueue(cfg, app))
-    const { id } = await queues.use(name).add({})
-    expect(id).toBeTruthy()
+    for (let i = 1; i <= 10; i++) {
+      await driver.store('Hello World!' + i)
+    }
+
+    const beforeQueueClearLength = (await driver.getQueueProperties()).approximateMessagesCount || 0
+    assert.isAbove(beforeQueueClearLength, 9)
+
+    const messages = await driver.clear()
+    assert.exists(messages)
+
+    const afterQueueClearLength = (await driver.getQueueProperties()).approximateMessagesCount || 0
+    assert.equal(afterQueueClearLength, 0)
   })
-
-  test(`queue use returns the same queue`, async ({ queues, expect }) => {
-    queues.extend(name, (cfg, app) => new AzureStorageQueue(cfg, app))
-    const queue1 = queues.use(name)
-    const queue2 = queues.use(name)
-    const { id } = await queue1.add({})
-    const job = await queue2.getJob(id)
-    expect(job).toBeTruthy
+  test('Get message in queue', async ({ assert }) => {
+    const driver = new AzureStorageQueue(configs['AzureStorage'])
+    await driver.store('Hello World!')
+    const message = await driver.getNext()
+    assert.exists(message)
   })
-
-  test('scheduled job is processed with a delay if delayed jobs are active', async function ({
-    queues,
-    expect,
-  }) {
-    queues.extend(name, (cfg, app) => new AzureStorageQueue(cfg, app))
-    const queue = queues.use(name)
-
-    await queue.add({}, { runAt: Date.now() + 500 })
-    await sleep(100)
-    let job = await queue.getJob()
-    expect(job).toBeNull()
-    await sleep(1000)
-    expect(job).toBeDefined()
+  test('Peek message in queue', async ({ assert }) => {
+    const driver = new AzureStorageQueue(configs['AzureStorage'])
+    await driver.store('Hello World!')
+    const peekedMessage = await driver.peekNext()
+    assert.exists(peekedMessage)
+  })
+  test('Delete message in queue', async ({ assert }) => {
+    const driver = new AzureStorageQueue(configs['AzureStorage'])
+    const createdMessage = await driver.store('Hello World!')
+    assert.exists(createdMessage)
+    sleep(100)
+    const deletedMessage = await driver.remove(createdMessage.id, createdMessage.receipt)
+    assert.exists(deletedMessage)
   })
 })

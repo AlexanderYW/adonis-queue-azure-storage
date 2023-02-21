@@ -5,7 +5,7 @@ import { Application } from '@adonisjs/application'
 import { ApplicationContract } from '@ioc:Adonis/Core/Application'
 import { Group, TestContext } from '@japa/core'
 
-import Queue from '@cavai/adonis-queue/build/src/Queue'
+import { QueueManager } from '@cavai/adonis-queue/build/src/QueueManager'
 import { AzureStorageConfig } from '../../src/drivers'
 
 const SECRET = 'asecureandlongrandomsecret'
@@ -81,7 +81,7 @@ export function setupGroup(
     for (const value of Object.values(configCopy)) value.name = Math.floor(Math.random() * 1000)
 
     // @ts-ignore
-    context.queues = new Queue(configCopy, app)
+    context.queues = new QueueManager(configCopy, app)
   })
 
   group.each.teardown(async ({ context }) => {

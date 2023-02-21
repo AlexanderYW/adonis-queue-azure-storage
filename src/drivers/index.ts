@@ -1,11 +1,25 @@
 import { DefaultAzureCredential } from '@azure/identity'
 import {
   DequeuedMessageItem,
+  MessageIdDeleteResponse,
+  MessagesClearResponse,
+  PeekedMessageItem,
+  QueueClearMessagesOptions,
   QueueClient,
+  QueueCreateOptions,
+  QueueCreateResponse,
+  QueueDeleteMessageOptions,
+  QueueDeleteOptions,
+  QueueDeleteResponse,
+  QueueGetPropertiesOptions,
+  QueueGetPropertiesResponse,
+  QueuePeekMessagesOptions,
   QueueReceiveMessageOptions,
   QueueSendMessageOptions,
   QueueSendMessageResponse,
   QueueServiceClient,
+  QueueUpdateMessageResponse,
+  ServiceListQueuesOptions,
   StorageSharedKeyCredential,
 } from '@azure/storage-queue'
 import type { Config } from '@ioc:Cavai/Adonis-Queue'
@@ -30,12 +44,15 @@ const safeParseString = (inputString: string) => {
   }
 }
 
-const unwrap = (job: DequeuedMessageItem | QueueSendMessageResponse): JobContract<any> => ({
-  id: job.messageId,
+const unwrap = (
+  message: DequeuedMessageItem | QueueSendMessageResponse | PeekedMessageItem
+): JobContract<any> => ({
+  id: message.messageId,
+  receipt: message['popReceipt'] || null,
   // @ts-ignore
-  payload: safeParseString(job.messageText || job._response.bodyAsText),
-  runAt: job.nextVisibleOn.getTime() || 0,
-  delayed: job.insertedOn !== job.nextVisibleOn,
+  payload: safeParseString(message.messageText || message._response.bodyAsText),
+  runAt: message['nextVisibleOn'] ? message['nextVisibleOn'].getTime() || 0 : 0,
+  delayed: message.insertedOn !== message['nextVisibleOn'],
   progress: 0,
   reportProgress(progress) {
     this.progress = progress
@@ -43,21 +60,16 @@ const unwrap = (job: DequeuedMessageItem | QueueSendMessageResponse): JobContrac
 })
 
 export default class AzureStorageQueue implements DriverContract {
-  // @ts-ignore
-  private poller: NodeJS.Timeout | null = null
-  // @ts-ignore
-  private processing: boolean = false
-
+  private queueServiceClient: QueueServiceClient | null = null
   private queue: QueueClient | null = null
   private processor: ((job: any) => void) | null = null
 
   // @ts-ignore unused app variable
-  constructor(private config: AzureStorageConfig, private app) {}
+  constructor(private config: AzureStorageConfig) {}
 
-  public getQueue(): QueueClient {
-    if (this.queue) return this.queue
+  public getQueueServiceClient(): QueueServiceClient {
+    if (this.queueServiceClient) return this.queueServiceClient
     const {
-      name,
       config: { accountName, accountKey, connectionString },
     } = this.config
 
@@ -83,10 +95,80 @@ export default class AzureStorageQueue implements DriverContract {
       )
     }
 
-    this.queue = queueServiceClient.getQueueClient(String(name))
+    this.queueServiceClient = queueServiceClient
+    return this.queueServiceClient
+  }
+
+  /**
+   * Gets list of queues
+   *
+   * @param options Options for listing queues
+   */
+  public async listQueues(options?: ServiceListQueuesOptions | undefined): Promise<any[]> {
+    const iterator = this.getQueueServiceClient().listQueues(options)
+
+    let item = await iterator.next()
+    const queueList: any[] = []
+    while (!item.done) {
+      queueList.push(item.value)
+      item = await iterator.next()
+    }
+
+    return queueList
+  }
+
+  /**
+   * Create queue
+   *
+   * @param queueName Name of queue to be removed
+   * @param options Options of create queue function
+   */
+  public async createQueue(
+    queueName: string,
+    options?: QueueCreateOptions | undefined
+  ): Promise<QueueCreateResponse> {
+    return await this.getQueueServiceClient().createQueue(queueName, options)
+  }
+
+  /**
+   * Delete queue
+   *
+   * @param queueName — name of the queue to delete.
+   * @param options — Options to Queue delete operation.
+   */
+  public async deleteQueue(
+    queueName: string,
+    options?: QueueDeleteOptions | undefined
+  ): Promise<QueueDeleteResponse> {
+    return await this.getQueueServiceClient().deleteQueue(queueName, options)
+  }
+
+  /**
+   * Get queue
+   *
+   * @returns a new QueueClient
+   */
+  public getQueue(): QueueClient {
+    if (this.queue) return this.queue
+
+    const { name } = this.config
+
+    this.queue = this.getQueueServiceClient().getQueueClient(String(name))
     this.queue.createIfNotExists()
     if (this.processor) this.queue.receiveMessages().then(this.processor)
     return this.queue
+  }
+
+  /**
+   * Get queue properties
+   *
+   * @param options — Options to Queue get properties operation.
+   * @returns — Response data for the Queue get properties operation.
+   */
+  public async getQueueProperties(
+    options?: QueueGetPropertiesOptions | undefined
+  ): Promise<QueueGetPropertiesResponse> {
+    return await this.getQueue().getProperties(options)
   }
 
   /**
@@ -94,10 +176,7 @@ export default class AzureStorageQueue implements DriverContract {
    *
    * @param payload Payload to queue for processing
    */
-  public async add<T extends Record<string, any>>(
-    payload: T,
-    opts: AddOptions = {}
-  ): Promise<JobContract<T>> {
+  public async store(payload: string, opts: AddOptions = {}): Promise<JobContract<any>> {
     let newPayload: string = typeof payload === 'object' ? JSON.stringify(payload) : payload
 
     let options: QueueSendMessageOptions = {}
@@ -105,43 +184,98 @@ export default class AzureStorageQueue implements DriverContract {
       options.visibilityTimeout = (opts.runAt - Date.now()) / 1000
     }
 
-    const job = await this.getQueue().sendMessage(newPayload, options)
-
-    return unwrap(job)
+    const message = await this.getQueue().sendMessage(newPayload, options)
+    return unwrap(message)
   }
 
   /**
-   * Gets job by ID
+   * Get next message
    *
-   * @param id Job ID
+   * @param options — Options to receive messages operation.
+   * @returns Response data for the receive messages operation.
    */
-  public async getJob(id?: string | number): Promise<JobContract<any> | null> {
-    let options: QueueReceiveMessageOptions = {}
-    if (id) {
-      options.requestId = String(id)
+  public async getNext(options?: QueueReceiveMessageOptions): Promise<JobContract<any> | null> {
+    const messages = await this.getQueue().receiveMessages(options)
+    if (messages.receivedMessageItems.length === 0) {
+      return null
     }
 
-    const job = await this.getQueue().receiveMessages(options)
-
-    return !job.receivedMessageItems[0] ? null : unwrap(job.receivedMessageItems[0])
+    const items: JobContract<any>[] = []
+    for (const message of messages.receivedMessageItems) {
+      items.push(unwrap(message))
+    }
+    return items.length === 1 ? items[0] : items
   }
 
   /**
-   * Gets multiple jobs
+   * Peek next message by ID
    *
-   * Optional @param numberOfJobs A nonzero integer value that specifies the number of messages to retrieve from the queue, up to a maximum of 32. If fewer are visible, the visible messages are returned. By default, a single message is retrieved from the queue with this operation.
+   * @param id Message ID
    */
-  public async getJobs(numberOfJobs?: number): Promise<JobContract<any> | null> {
-    let options: QueueReceiveMessageOptions = {}
-    numberOfJobs ?? (options.numberOfMessages = numberOfJobs)
+  public async peekNext(options?: QueuePeekMessagesOptions): Promise<JobContract<any> | null> {
+    const messages = await this.getQueue().peekMessages(options)
 
-    const jobList = await this.getQueue().receiveMessages(options)
-
-    let jobs: any = []
-    for (const job of jobList.receivedMessageItems) {
-      jobs.push(unwrap(job))
+    if (messages.peekedMessageItems.length === 0) {
+      return null
     }
-    return jobs
+
+    const items: JobContract<any>[] = []
+    for (const message of messages.peekedMessageItems) {
+      items.push(unwrap(message))
+    }
+    return items.length === 1 ? items[0] : items
+  }
+
+  /**
+   * Removes messsage from queue
+   *
+   * @param messageId Id of the message
+   * @param popReceipt A valid pop receipt value returned from an earlier call to the receive messages or update message operation.
+   * @param options Options to delete message operation.
+   */
+  public async remove(
+    messageId: string,
+    popReceipt: string,
+    options?: QueueDeleteMessageOptions | undefined
+  ): Promise<MessageIdDeleteResponse> {
+    return await this.getQueue().deleteMessage(messageId, popReceipt, options)
+  }
+
+  /**
+   * Clear deletes all messages from a queue.
+   *
+   * @param options — Options to clear messages operation.
+   * @returns — Response data for the clear messages operation.
+   */
+  public async clear(options?: QueueClearMessagesOptions): Promise<MessagesClearResponse> {
+    return await this.getQueue().clearMessages(options)
+  }
+
+  /**
+   * Update job
+   *
+   * @param messageId Id of the message
+   * @param popReceipt A valid pop receipt value returned from an earlier call to the receive messages or update message operation.
+   * @param message Message to update. If this parameter is undefined, then the content of the message won't be updated.
+   * @param visibilityTimeout Specifies the new visibility timeout value, in seconds, relative to server time. The new value must be larger than or equal to 0, and cannot be larger than 7 days. The visibility timeout of a message cannot be set to a value later than the expiry time. A message can be updated until it has been deleted or has expired.
+   * @param options Options to update message operation.
+   * @returns — Response data for the update message operation.
+   */
+  public async update(
+    messageId: string,
+    popReceipt: string,
+    message?: string,
+    visibilityTimeout?: number,
+    options?: QueueDeleteMessageOptions
+  ): Promise<QueueUpdateMessageResponse> {
+    // Update the received message
+    return await this.getQueue().updateMessage(
+      messageId,
+      popReceipt,
+      message,
+      visibilityTimeout,
+      options
+    )
   }
 
   public async close(): Promise<void> {
