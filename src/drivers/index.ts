@@ -1,7 +1,7 @@
+/* eslint-disable no-undef-init */
 import { DefaultAzureCredential } from '@azure/identity'
 import {
   DequeuedMessageItem,
-  MessageIdDeleteResponse,
   MessagesClearResponse,
   PeekedMessageItem,
   QueueClearMessagesOptions,
@@ -67,13 +67,17 @@ export default class AzureStorageQueue implements DriverContract {
   // @ts-ignore unused app variable
   constructor(private config: AzureStorageConfig) {}
 
+  /**
+   * Creates an instance of QueueServiceClient, if it doesn't exist, else returns existing.
+   * @returns — A new QueueServiceClient object from the given connection type
+   */
   public getQueueServiceClient(): QueueServiceClient {
     if (this.queueServiceClient) return this.queueServiceClient
     const {
       config: { accountName, accountKey, connectionString },
     } = this.config
 
-    let credential: any
+    let credential: any = undefined
     if (
       process.env.AZURE_TENANT_ID &&
       process.env.AZURE_CLIENT_ID &&
@@ -85,7 +89,7 @@ export default class AzureStorageQueue implements DriverContract {
       credential = new StorageSharedKeyCredential(accountName, accountKey)
     }
 
-    let queueServiceClient: QueueServiceClient
+    let queueServiceClient: QueueServiceClient | undefined = undefined
     if (connectionString) {
       queueServiceClient = QueueServiceClient.fromConnectionString(connectionString)
     } else {
@@ -208,9 +212,31 @@ export default class AzureStorageQueue implements DriverContract {
   }
 
   /**
+   * Get job from database by its ID
+   */
+  public async getJob(_id: number): Promise<JobContract<any> | null> {
+    throw new Error('Not implemented')
+  }
+
+  /**
+   * Re-schedule job (update attempts and available_at) in Database
+   */
+  public async reSchedule(_job: JobContract, _retryAfter: number) {
+    throw new Error('Not implemented')
+  }
+
+  /**
+   * Mark job as failed in database
+   */
+  public async markFailed(_job: JobContract) {
+    throw new Error('Not implemented')
+  }
+
+  /**
    * Peek next message by ID
    *
-   * @param id Message ID
+   * @param options — Options to peek messages operation.
+   * @returns Response data for the peek messages operation.
    */
   public async peekNext(options?: QueuePeekMessagesOptions): Promise<JobContract<any> | null> {
     const messages = await this.getQueue().peekMessages(options)
@@ -237,8 +263,8 @@ export default class AzureStorageQueue implements DriverContract {
     messageId: string,
     popReceipt: string,
     options?: QueueDeleteMessageOptions | undefined
-  ): Promise<MessageIdDeleteResponse> {
-    return await this.getQueue().deleteMessage(messageId, popReceipt, options)
+  ): Promise<void> {
+    await this.getQueue().deleteMessage(messageId, popReceipt, options)
   }
 
   /**

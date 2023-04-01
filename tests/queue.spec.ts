@@ -9,6 +9,7 @@
 
 import { test } from '@japa/runner'
 import AzureStorageQueue, { AzureStorageConfig } from '../src/drivers'
+import { QueueManager } from '@cavai/adonis-queue'
 // import { setupGroup, sleep } from './helpers'
 
 const sleep = (time) => {
@@ -31,6 +32,25 @@ test.group('Azure Storage Queue driver', (group) => {
   test('Create instance of driver', async ({ assert }) => {
     const driver = new AzureStorageQueue(configs['AzureStorage'])
     assert.isTrue(driver instanceof AzureStorageQueue)
+  })
+  test('Test use of driver in manager', async ({ expectTypeOf }) => {
+    // Test logic goes here
+    const driver = new AzureStorageQueue(configs['AzureStorage'])
+
+    const queueManager = new QueueManager(
+      {
+        default: 'azureStorageQueue',
+        queues: {
+          // @ts-ignore
+          azureStorageQueue: () => driver,
+        },
+      },
+      null, //createLogger(),
+      '/tmp/place'
+    )
+
+    // Test types
+    expectTypeOf(queueManager.use).parameter(0).toEqualTypeOf<'azureStorageQueue'>()
   })
   test('Authorize access', async ({ assert }) => {
     const driver = new AzureStorageQueue(configs['AzureStorage'])
@@ -94,7 +114,6 @@ test.group('Azure Storage Queue driver', (group) => {
     const createdMessage = await driver.store('Hello World!')
     assert.exists(createdMessage)
     sleep(100)
-    const deletedMessage = await driver.remove(createdMessage.id, createdMessage.receipt)
-    assert.exists(deletedMessage)
+    await driver.remove(createdMessage.id, createdMessage.receipt)
   })
 })
